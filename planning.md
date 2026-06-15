@@ -47,7 +47,7 @@ It gives stylistic advice on how to pair the newly found item with the user's ex
 A string containing a styling recommendation on how to pair the `new_item` with items the user already owns.
 **What happens if it fails or returns nothing:**
 <!-- What should the agent do if the wardrobe is empty or no outfit can be suggested? -->
-If the wardrobe is empty, the agent should ask the user to populate their wardrobe first and try again. If it fails to generate a valid outfit, the agent should prompt the user to provide a more accurate request.
+If the wardrobe is empty, the tool calls the LLM with a general styling prompt (what kinds of pieces pair well, what vibe it suits) instead of returning an error. 
 ---
 
 ### Tool 3: create_fit_card
@@ -65,7 +65,7 @@ This tool generates a short, shareable, social-media-style description of the us
 A short string description of the completed outfit formatted like an Instagram caption.
 **What happens if it fails or returns nothing:**
 <!-- What should the agent do if the outfit data is incomplete? -->
-If the outfit input is missing or incomplete, the agent should inform the user that it couldn't generate a fit card and ask if they'd like to search for a new item to start over.
+If the outfit input is empty or missing, the tool returns a descriptive error message string and does not call the LLM. It does not raise an exception or return an empty string. 
 ---
 
 ### Additional Tools (if any)
@@ -83,9 +83,10 @@ The agent uses a conditional loop that actively checks for errors and attempts f
    - *Error Check:* If `results` is empty, it triggers a fallback: it removes the `size` or `max_price` constraint and calls `search_listings` again.
    - *Terminal Error Check:* If `results` is still empty after the retry, it sets `session["error"]` to explain the failure, informs the user, and terminates the loop early.
 2. **Selection Phase:** It attempts to assign the top match (`results[0]`) to `selected_item`.
-   - *Error Check:* If the `results` list is unexpectedly empty here, or if the selected item is malformed (e.g., missing critical fields like `title`, `price`, or `id`), it sets `session["error"]` indicating a data processing issue and terminates the loop early.
+   - *Error Check:* If the `results` list is unexpectedly empty here, or if the selected item is malformed (e.g., missing critical fields like `title`, `price`, or `id`), it sets `session["error"]` indicating a data processing issue and terminates the loop early. It will as kthe user 
 3. **Styling Phase:** It calls `suggest_outfit` using the `selected_item` and the user's `wardrobe`.
-   - *Error Check:* If the user's wardrobe is empty or the tool fails, it sets `session["error"]` asking the user to update their wardrobe, and terminates the loop early.
+   - *Empty Wardrobe:* `suggest_outfit` handles this internally — it calls the LLM with a general styling prompt instead of wardrobe-specific advice. The agent does not short-circuit; it continues to `create_fit_card` with whatever `suggest_outfit` returns.
+   - *Error Check:* If `suggest_outfit` returns an empty string, the agent sets `session["error"]` and halts.
 4. **Card Generation Phase:** It calls `create_fit_card` using the `outfit_suggestion` and `selected_item`.
    - *Error Check:* If inputs are invalid or generation fails, it catches the error, sets `session["error"]`, and halts.
 5. **Completion:** If all tools succeed, it returns the final completed fit card to the user.---
@@ -107,7 +108,7 @@ For each tool, describe the specific failure mode you're handling and what the a
 | Tool | Failure mode | Agent response |
 |------|-------------|----------------|
 | search_listings | No results match the query | Will inform the user no items were found, suggest adjusting parameters (like raising max price), and terminate the current loop early. |
-| suggest_outfit | Wardrobe is empty | Will wait for the user to add items to their wardrobe or load an example wardrobe before attempting again. |
+| suggest_outfit | Wardrobe is empty | The tool calls the LLM with a general styling prompt (what pairs well, what vibe it suits) and returns that advice. The agent does not halt — it proceeds to `create_fit_card` with the general advice. |
 | create_fit_card | Outfit input is missing or incomplete | Will inform the user of the generation failure and ask if they want to run a new search. |
 ---
 
@@ -145,7 +146,9 @@ Planning Loop ──────────────────────
     │       │                                                          │
     ├─► suggest_outfit(selected_item, wardrobe)                        │
     │       │                                                          │
-    │       ├─► [ERROR: Empty Wardrobe] ─► [ERROR] ─► Return           │
+    │       ├─► [Empty Wardrobe] ─► LLM general styling advice ──┐     │
+    │       │                                                     │     │
+    │       ├─► [Has Wardrobe]   ─► LLM wardrobe-specific outfits┘     │
     │       │                                                          │
     │   Session: outfit_suggestion = "..."                             │
     │       │                                                          │
@@ -171,14 +174,20 @@ Planning Loop ──────────────────────
      "I'll give Claude my Tool 1 spec (inputs, return value, failure mode) and ask it to implement
      search_listings() using load_listings() from the data loader — then test it against 3 queries
      before trusting it" is a plan. -->
-- search_listings: I will give Claude the Tool 1 spec from this document and ask it to implement the function in Python using load_listings() from utils/data_loader.py. Before trusting it, I will verify the code properly filters by description, size, and max_price, and I will test it against 3 specific queries (including one guaranteed to fail to test the empty return list).
-- suggest_outfit: I will give Claude the Tool 2 spec and the schema from data/wardrobe_schema.json. I will ask it to write a prompt-based function using the Groq LLM to generate the style advice. I will verify it by testing it once with get_example_wardrobe() and once with get_empty_wardrobe() to ensure the error handling works.
-- create_fit_card: I will give Claude the Tool 3 spec and ask it to write a Groq LLM call that formats the outputs of Tool 1 and 2 into a social media caption. I will verify it by checking that the output tone is casual and doesn't sound like a robotic product description.
-
+- **search_listings:** I will give Claude the Tool 1 spec from this document and ask it to implement the function in Python using `load_listings()` from `utils/data_loader.py`. Before trusting it, I will verify the code properly filters by description, size, and max_price, and I will test it against 3 specific queries (including one guaranteed to fail to test the empty return list).
+- **suggest_outfit:** I will give Claude the Tool 2 spec and the schema from `data/wardrobe_schema.json`. I will ask it to write a prompt-based function using the Groq LLM to generate the style advice. I will verify this by **writing a dedicated test script (`test_suggest_outfit.py`)** that programmatically executes the function against both `get_example_wardrobe()` and `get_empty_wardrobe()`, using assertions to ensure it returns valid advice in success states and gracefully triggers the intended error response when the wardrobe is empty.
+- **create_fit_card:** I will give Claude the Tool 3 spec and ask it to write a Groq LLM call that formats the outputs of Tool 1 and 2 into a social media caption. I will verify this by **writing an automated evaluation test (`test_fit_card.py`)** that passes multiple distinct inputs to the function. The script will programmatically assert that the generated fit cards are non-identical for different inputs (ensuring variety) and log the text output so I can audit it to ensure the tone remains casual.
 
 **Milestone 3 — Individual tool implementations:**
+- **search_listings:** Loads all listings via `load_listings()`, filters by `max_price` (inclusive) and `size` (case-insensitive substring match), then scores each remaining listing by keyword overlap — the description is tokenized into individual words and each word is checked against a concatenated string of title, description, category, style_tags, colors, and brand. Listings with a score of 0 are dropped. Survivors are sorted by score descending and the top 3 are returned.
+- **suggest_outfit:** Uses a Groq client (`llama-3.3-70b-versatile`) initialized from `GROQ_API_KEY`. Formats `new_item` details (title, category, style_tags, colors, condition, price, platform) into a prompt string. Branches on wardrobe state: if `wardrobe['items']` is empty, sends a general styling prompt asking for pair suggestions and vibe advice; if the wardrobe has items, formats each as a bullet (name, category, colors, style_tags, optional notes) and asks the LLM for specific named-piece outfit combinations. Returns the stripped LLM response, or a descriptive error string if the response is empty.
+- **create_fit_card:** Guards against an empty or whitespace-only `outfit` string and returns a descriptive error message without calling the LLM. Otherwise builds a prompt with the item's title, price, and platform alongside the outfit description, instructing the LLM to produce a 1–2 sentence casual OOTD caption with no hashtags or emojis. Calls the LLM at `temperature=1.0` for caption variety. Returns the stripped response, or a fallback error string if the LLM returns nothing.
 
 **Milestone 4 — Planning loop and state management:**
+- **Query parsing (`_parse_query`):** Implemented with regex in `agent.py`. Size is extracted first by an explicit `"size XYZ"` pattern, then by matching bare size tokens (XXS, XS, S/M, M/L, XL/XXL, XXL, XL, SM, ML, S, M, L) with a negative lookbehind on apostrophes to avoid matching contractions. `max_price` is extracted by worded phrases (`under/max/less than/up to/below $X`) then by a bare `$X` pattern. The description is taken from the first sentence only (split on `.!?`) so wardrobe context in a longer query does not pollute keyword search; size tokens and price tokens are then stripped and whitespace collapsed.
+- **Session initialization (`_new_session`):** Returns a dict with eight keys: `query`, `parsed`, `search_results`, `selected_item`, `wardrobe`, `outfit_suggestion`, `fit_card`, and `error`. All output fields start as `None`/`[]`; `error` being non-`None` signals early termination.
+- **Planning loop (`run_agent`):** Two-level fallback search — first call uses all parsed constraints; if empty, retries without `size`; if still empty, retries without `max_price` as well. After a successful search the top result is validated for required fields (`id`, `title`, `price`) before being stored. `suggest_outfit` and `create_fit_card` outputs are each guarded: an empty/whitespace response sets `session["error"]` and exits early. The completed session dict is always the return value.
+- **Gradio interface (`app.py`):** `handle_query()` guards against a blank query string, selects the wardrobe dict based on the radio choice (`"Example wardrobe"` → `get_example_wardrobe()`, otherwise `get_empty_wardrobe()`), then calls `run_agent()`. On error it surfaces `session["error"]` in the first output panel and returns empty strings for the other two. On success it formats `session["selected_item"]` into a multi-line label string (title, price, platform, size, condition, colors, style tags, brand, description) and returns it alongside `session["outfit_suggestion"]` and `session["fit_card"]`. The UI wires `handle_query` to both the submit button click and the Enter key on the query textbox.
 
 ---
 
