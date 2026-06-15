@@ -69,8 +69,15 @@ def search_listings(
 
     Before writing code, fill in the Tool 1 section of planning.md.
     """
+    print(f"\n{'='*60}")
+    print(f"[search_listings] TOOL CALLED")
+    print(f"  description : {repr(description)}")
+    print(f"  size        : {repr(size)}")
+    print(f"  max_price   : {repr(max_price)}")
+
     # Step 1: Load all listings
     listings = load_listings()
+    print(f"[search_listings] Loaded {len(listings)} total listings from dataset")
 
     # Step 2: Filter by max_price and size (if provided)
     filtered = []
@@ -80,9 +87,11 @@ def search_listings(
         if size is not None and size.lower() not in listing["size"].lower():
             continue
         filtered.append(listing)
+    print(f"[search_listings] {len(filtered)} listings remain after price/size filter")
 
     # Step 3: Score each listing by keyword overlap with description
     keywords = set(description.lower().split())
+    print(f"[search_listings] Scoring by keyword overlap: {keywords}")
 
     scored = []
     for listing in filtered:
@@ -101,9 +110,15 @@ def search_listings(
         if score > 0:
             scored.append((score, listing))
 
+    print(f"[search_listings] {len(scored)} listings scored > 0 for keyword overlap")
+
     # Step 5: Sort by score descending and return top 3
     scored.sort(key=lambda x: x[0], reverse=True)
-    return [listing for _, listing in scored[:3]]
+    results = [listing for _, listing in scored[:3]]
+    print(f"[search_listings] RETURNING top {len(results)} result(s):")
+    for i, r in enumerate(results):
+        print(f"  [{i}] {r['title']} — ${r['price']} ({r['platform']})")
+    return results
 
 
 # ── Tool 2: suggest_outfit ────────────────────────────────────────────────────
@@ -135,6 +150,12 @@ def suggest_outfit(new_item: dict, wardrobe: dict) -> str:
     """
     items = wardrobe.get("items", [])
 
+    print(f"\n{'='*60}")
+    print(f"[suggest_outfit] TOOL CALLED")
+    print(f"  new_item : {repr(new_item.get('title', 'N/A'))} — ${new_item.get('price', 'N/A')} ({new_item.get('platform', 'N/A')})")
+    print(f"  wardrobe : {len(items)} item(s)")
+    print(f"  >> STATE PASSED IN: selected_item from search_listings -> new_item here")
+
     client = _get_groq_client()
 
     # Format the new item's key details for the prompt
@@ -149,6 +170,7 @@ def suggest_outfit(new_item: dict, wardrobe: dict) -> str:
     )
 
     if not items:
+        print(f"[suggest_outfit] Wardrobe is EMPTY — switching to general styling prompt")
         # Empty wardrobe — ask the LLM for general styling advice instead
         prompt = (
             "You are a personal stylist helping someone style a thrifted find.\n\n"
@@ -159,6 +181,7 @@ def suggest_outfit(new_item: dict, wardrobe: dict) -> str:
             "bullet points — just talk like a friend giving quick style advice."
         )
     else:
+        print(f"[suggest_outfit] Wardrobe has items — building wardrobe-specific prompt")
         # Format each wardrobe item as a concise bullet
         wardrobe_lines = []
         for item in items:
@@ -181,6 +204,7 @@ def suggest_outfit(new_item: dict, wardrobe: dict) -> str:
             "formal occasion descriptions — just talk like a friend giving quick style advice."
         )
 
+    print(f"[suggest_outfit] Calling LLM (llama-3.3-70b-versatile)...")
     response = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[{"role": "user", "content": prompt}],
@@ -196,6 +220,7 @@ def suggest_outfit(new_item: dict, wardrobe: dict) -> str:
             "and try again."
         )
 
+    print(f"[suggest_outfit] RETURNING outfit suggestion ({len(result)} chars)")
     return result
 
 
@@ -228,8 +253,16 @@ def create_fit_card(outfit: str, new_item: dict) -> str:
 
     Before writing code, fill in the Tool 3 section of planning.md.
     """
+    print(f"\n{'='*60}")
+    print(f"[create_fit_card] TOOL CALLED")
+    print(f"  new_item : {repr(new_item.get('title', 'N/A'))}")
+    outfit_preview = outfit[:80] + "..." if outfit and len(outfit) > 80 else outfit
+    print(f"  outfit   : {repr(outfit_preview)}")
+    print(f"  >> STATE PASSED IN: outfit_suggestion from suggest_outfit -> outfit here")
+
     # Guard: missing or blank outfit string
     if not outfit or not outfit.strip():
+        print(f"[create_fit_card] FAILURE — outfit string is empty, returning error message without calling LLM")
         return (
             "I couldn't generate a fit card because the outfit description is "
             "missing or incomplete. Would you like to search for a new item to "
@@ -255,6 +288,7 @@ def create_fit_card(outfit: str, new_item: dict) -> str:
         "Return only the caption text, nothing else."
     )
 
+    print(f"[create_fit_card] Calling LLM (llama-3.3-70b-versatile, temperature=1.0 for variety)...")
     response = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[{"role": "user", "content": prompt}],
@@ -269,4 +303,5 @@ def create_fit_card(outfit: str, new_item: dict) -> str:
             "search for a new item to start over?"
         )
 
+    print(f"[create_fit_card] RETURNING fit card ({len(result)} chars)")
     return result
